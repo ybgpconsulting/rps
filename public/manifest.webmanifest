@@ -1,0 +1,25 @@
+{
+  "id": "/",
+  "name": "Royal Public School, Tatiri",
+  "short_name": "Royal School",
+  "description": "School updates, announcements and information from Royal Public School, Tatiri.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F8F5EC",
+  "theme_color": "#0A1B33",
+  "icons": [
+    {
+      "src": "/images/pwa-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/images/pwa-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
