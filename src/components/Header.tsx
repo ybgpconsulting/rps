@@ -264,7 +264,7 @@ export function Header() {
           <div className="flex h-[64px] w-full items-center justify-between gap-3 px-3 sm:px-5 lg:h-[76px] lg:px-6">
             <Brand className="shrink-0" />
 
-            <nav aria-label="Main" className="hidden items-center xl:flex">
+            <nav aria-label="Main" className="hidden items-center 2xl:flex">
               {navItems.map((item) => (
                 <NavLink
                   key={item.to}
@@ -294,7 +294,7 @@ export function Header() {
             </nav>
 
             <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-              <LanguageToggle className="scale-[0.92] sm:scale-100" />
+              <LanguageToggle className="hidden sm:flex" />
               <Link
                 to="/admissions"
                 className="btn-gold hidden !px-5 !py-3 !text-[10.5px] lg:inline-flex xl:ml-1"
@@ -306,7 +306,7 @@ export function Header() {
                 onClick={() => setMenuOpen(true)}
                 aria-label={t('a11y.openMenu')}
                 aria-expanded={menuOpen}
-                className="flex h-10 w-10 items-center justify-center rounded-full border border-royal/15 text-royal transition hover:border-gold hover:text-gold-deep xl:hidden"
+                className="flex h-10 w-10 items-center justify-center rounded-full border border-royal/15 text-royal transition hover:border-gold hover:text-gold-deep 2xl:hidden"
               >
                 <Icon name="menu" className="h-5 w-5" />
               </button>

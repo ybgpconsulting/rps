@@ -22,7 +22,7 @@ export function BottomDock() {
       className="fixed inset-x-3 bottom-3 z-40 lg:hidden"
     >
       <div className="safe-bottom rounded-[24px] border border-royal/10 bg-cream/95 shadow-[0_24px_60px_-20px_rgba(10,27,51,0.5)] backdrop-blur-xl">
-        <ul className="grid h-[68px] grid-cols-[0.85fr_0.95fr_1.35fr_0.85fr_0.85fr] items-stretch px-1">
+        <ul className="grid h-[68px] grid-cols-[0.7fr_1.15fr_1.35fr_0.85fr_0.95fr] items-stretch px-1">
           {tabs.map((tab) => {
             const isFeatured = tab.to === '/updates'
             return (
@@ -58,14 +58,14 @@ export function BottomDock() {
                       )}
                       <span
                         className={cn(
-                          'max-w-full truncate text-[9px] font-semibold leading-none transition-colors',
+                          'block w-full max-w-full truncate text-[9px] font-semibold leading-none transition-colors',
                           isFeatured
                             ? 'whitespace-nowrap text-[10px] tracking-[-0.03em]'
                             : 'uppercase tracking-[0.04em]',
                           isActive ? 'text-royal-deep' : 'text-royal/60',
                         )}
                       >
-                        {tab.to === '/admissions' ? t('common.enquireNow') : t(tab.key)}
+                        {t(tab.key)}
                       </span>
                       {!isFeatured && (
                         <span
