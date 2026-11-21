@@ -1,5 +1,7 @@
 import type { Localized } from '../i18n'
 import { useLanguage } from '../i18n'
+import { Link } from 'react-router-dom'
+import { Icon } from './Icon'
 import { SmartImage } from './SmartImage'
 
 export function PageHeader({
@@ -7,6 +9,7 @@ export function PageHeader({
   title,
   description,
   image,
+  crumb,
 }: {
   eyebrow: Localized
   title: Localized
@@ -41,6 +44,23 @@ export function PageHeader({
       />
 
       <div className="container-x relative pb-16 pt-16 sm:pb-20 sm:pt-20">
+        {crumb && (
+          <nav aria-label="Breadcrumb" className="mb-6">
+            <ol className="flex items-center gap-2 text-xs text-white/65">
+              <li>
+                <Link to="/" className="transition-colors hover:text-gold-light">
+                  {tl({ en: 'Home', hi: 'होम' })}
+                </Link>
+              </li>
+              <li aria-hidden="true">
+                <Icon name="chevronRight" className="h-3 w-3" />
+              </li>
+              <li aria-current="page" className="font-semibold text-gold-pale">
+                {tl(crumb)}
+              </li>
+            </ol>
+          </nav>
+        )}
         <p className="eyebrow-light">{tl(eyebrow)}</p>
         <h1 className="display-hero mt-5 max-w-4xl text-balance text-white">{tl(title)}</h1>
         {description && (

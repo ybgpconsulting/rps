@@ -5,6 +5,7 @@ export const dictionary = {
   'nav.vision': { en: 'Vision & Mission', hi: 'दृष्टि एवं मिशन' },
   'nav.academics': { en: 'Academics', hi: 'शैक्षणिक' },
   'nav.facilities': { en: 'Facilities', hi: 'सुविधाएँ' },
+  'nav.transport': { en: 'Transport', hi: 'परिवहन' },
   'nav.campus': { en: 'Campus Life', hi: 'परिसर जीवन' },
   'nav.gallery': { en: 'Gallery', hi: 'गैलरी' },
   'nav.admissions': { en: 'Admissions', hi: 'प्रवेश' },

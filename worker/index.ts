@@ -1,4 +1,5 @@
 import {
+  collectUploadedMediaKeys,
   createDefaultContentSnapshot,
   migrateSiteContent,
   validateSiteContent,
@@ -9,6 +10,7 @@ import {
   toSchoolUpdate,
   type SchoolUpdateInput,
 } from '../src/lib/updates-model'
+import { SITE_URL, seo, type SeoPath } from '../src/data'
 
 type Env = Cloudflare.Env & {
   ASSETS: { fetch: typeof fetch }
@@ -23,6 +25,7 @@ interface AccessClaims {
   exp?: number
   iat?: number
   iss?: string
+  nbf?: number
 }
 
 interface AccessJwk extends JsonWebKey {
@@ -52,6 +55,19 @@ const json = (body: unknown, status = 200) =>
       'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
     },
   })
+
+function withSecurityHeaders(response: Response) {
+  const headers = new Headers(response.headers)
+  headers.set('X-Content-Type-Options', 'nosniff')
+  headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
+  headers.set('X-Frame-Options', 'SAMEORIGIN')
+  headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
+}
 
 function decodeBase64Url(value: string) {
   const padded = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=')
@@ -119,19 +135,24 @@ async function authenticateAdmin(
 
   const configuredDomain = env.ACCESS_TEAM_DOMAIN.replace(/^https?:\/\//, '').replace(/\/+$/, '')
   const issuer = `https://${configuredDomain}`
+  const now = Math.floor(Date.now() / 1000)
   if (
     header.alg !== 'RS256' ||
     !header.kid ||
     claims.iss !== issuer ||
-    !claims.exp ||
-    claims.exp <= Math.floor(Date.now() / 1000) ||
-    (claims.iat && claims.iat > Math.floor(Date.now() / 1000) + 60)
+    typeof claims.exp !== 'number' ||
+    !Number.isFinite(claims.exp) ||
+    claims.exp <= now ||
+    (claims.iat !== undefined &&
+      (typeof claims.iat !== 'number' || !Number.isFinite(claims.iat) || claims.iat > now + 60)) ||
+    (claims.nbf !== undefined &&
+      (typeof claims.nbf !== 'number' || !Number.isFinite(claims.nbf) || claims.nbf > now))
   ) {
     return { error: 'The Cloudflare Access token is invalid or expired.', status: 401 }
   }
 
   const audiences = Array.isArray(claims.aud) ? claims.aud : [claims.aud]
-  if (!audiences.includes(env.ACCESS_AUD)) {
+  if (!audiences.some((audience) => typeof audience === 'string' && audience === env.ACCESS_AUD)) {
     return { error: 'This Cloudflare Access application is not authorized for the admin panel.', status: 403 }
   }
 
@@ -165,7 +186,7 @@ async function authenticateAdmin(
   }
   if (!verified) return { error: 'The Cloudflare Access token signature is invalid.', status: 401 }
 
-  const email = claims.email?.trim().toLowerCase()
+  const email = typeof claims.email === 'string' ? claims.email.trim().toLowerCase() : ''
   if (!email || email !== env.ADMIN_EMAIL.trim().toLowerCase()) {
     return { error: 'This email address is not an approved school administrator.', status: 403 }
   }
@@ -174,6 +195,58 @@ async function authenticateAdmin(
 
 function errorResponse(result: { error: string; status: number }) {
   return json({ error: result.error }, result.status)
+}
+
+function validateAdminMutation(request: Request) {
+  const expectedOrigin = new URL(request.url).origin
+  if (request.headers.get('Origin') !== expectedOrigin) {
+    return json({ error: 'This request did not come from the school website.' }, 403)
+  }
+
+  const fetchSite = request.headers.get('Sec-Fetch-Site')
+  if (fetchSite && fetchSite !== 'same-origin') {
+    return json({ error: 'Cross-site admin requests are not allowed.' }, 403)
+  }
+  return null
+}
+
+async function readBodyWithinLimit(
+  request: Request,
+  maxBytes: number,
+  tooLargeMessage: string,
+): Promise<Uint8Array | Response> {
+  const contentLength = request.headers.get('Content-Length')
+  if (contentLength !== null) {
+    if (!/^\d+$/.test(contentLength)) return json({ error: 'The request size is invalid.' }, 400)
+    if (Number(contentLength) > maxBytes) return json({ error: tooLargeMessage }, 413)
+  }
+
+  if (!request.body) return new Uint8Array()
+  const reader = request.body.getReader()
+  const chunks: Uint8Array[] = []
+  let totalBytes = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      totalBytes += value.byteLength
+      if (totalBytes > maxBytes) {
+        await reader.cancel()
+        return json({ error: tooLargeMessage }, 413)
+      }
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+
+  const body = new Uint8Array(totalBytes)
+  let offset = 0
+  for (const chunk of chunks) {
+    body.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return body
 }
 
 async function handleContentRead(env: Env) {
@@ -197,31 +270,49 @@ async function handleContentRead(env: Env) {
 }
 
 async function handleContentPublish(request: Request, env: Env, email: string) {
-  if (!env.SITE_CONTENT) return json({ error: 'The site content database is not configured.' }, 503)
+  const database = env.SITE_CONTENT
+  if (!database) return json({ error: 'The site content database is not configured.' }, 503)
 
-  const body = await request.arrayBuffer()
-  if (body.byteLength > 250_000) return json({ error: 'The content document exceeds the 250 KB limit.' }, 413)
+  const body = await readBodyWithinLimit(
+    request,
+    250_000,
+    'The content document exceeds the 250 KB limit.',
+  )
+  if (body instanceof Response) return body
 
   let content: unknown
   try {
-    content = JSON.parse(new TextDecoder().decode(body))
+    content = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))
   } catch {
     return json({ error: 'The request body must be valid JSON.' }, 400)
   }
   const validationError = validateSiteContent(content)
   if (validationError) return json({ error: validationError }, 400)
 
+  const mediaKeys = collectUploadedMediaKeys(content)
+  if (mediaKeys.length > 250) {
+    return json({ error: 'Published content can reference no more than 250 uploaded media files.' }, 400)
+  }
+
   const serialized = JSON.stringify(content)
-  await env.SITE_CONTENT.prepare(
-    `INSERT INTO published_content (id, content_json, updated_at, updated_by)
-     VALUES ('main', ?, datetime('now'), ?)
-     ON CONFLICT(id) DO UPDATE SET
-       content_json = excluded.content_json,
-       updated_at = excluded.updated_at,
-       updated_by = excluded.updated_by`,
-  )
-    .bind(serialized, email)
-    .run()
+  await database.batch([
+    database.prepare(
+      `INSERT INTO published_content (id, content_json, updated_at, updated_by)
+       VALUES ('main', ?, datetime('now'), ?)
+       ON CONFLICT(id) DO UPDATE SET
+         content_json = excluded.content_json,
+         updated_at = excluded.updated_at,
+         updated_by = excluded.updated_by`,
+    ).bind(serialized, email),
+    database.prepare(
+      'DELETE FROM media_references WHERE source_type = ? AND source_id = ?',
+    ).bind('content', 'main'),
+    ...mediaKeys.map((key) =>
+      database.prepare(
+        'INSERT INTO media_references (media_key, source_type, source_id) VALUES (?, ?, ?)',
+      ).bind(key, 'content', 'main'),
+    ),
+  ])
 
   return json({ content, updatedAt: new Date().toISOString() })
 }
@@ -242,30 +333,14 @@ async function handleMediaUpload(request: Request, env: Env, allowPdf = false) {
     return json({ error: allowPdf ? 'Choose a PDF, JPG, PNG, or WebP file.' : 'Choose a JPG, PNG, or WebP photo.' }, 415)
   }
 
-  const declaredLength = Number(request.headers.get('Content-Length') ?? 0)
-  if (declaredLength > mediaType.maxBytes) {
-    return json({ error: `This file must be ${mediaType.maxBytes / (1024 * 1024)} MB or smaller.` }, 413)
-  }
-
-  const body = await request.arrayBuffer()
-  if (body.byteLength === 0) return json({ error: 'The selected photo is empty.' }, 400)
-  if (body.byteLength > mediaType.maxBytes) {
-    return json({ error: `This file must be ${mediaType.maxBytes / (1024 * 1024)} MB or smaller.` }, 413)
-  }
-
-  const bytes = new Uint8Array(body)
+  const sizeLimitMessage = `This file must be ${mediaType.maxBytes / (1024 * 1024)} MB or smaller.`
+  const bytes = await readBodyWithinLimit(request, mediaType.maxBytes, sizeLimitMessage)
+  if (bytes instanceof Response) return bytes
+  if (bytes.byteLength === 0) return json({ error: 'The selected file is empty.' }, 400)
   if (bytes.length < (contentType === 'application/pdf' ? 5 : 12) || !mediaType.signature(bytes)) {
     return json({ error: 'The file contents do not match the selected image type.' }, 415)
   }
 
-  const key = `${crypto.randomUUID()}.${mediaType.extension}`
-  await env.SITE_MEDIA.put(key, body, {
-    httpMetadata: {
-      contentType,
-      cacheControl: 'public, max-age=31536000, immutable',
-      contentDisposition: contentType === 'application/pdf' ? 'inline' : 'inline',
-    },
-  })
   const rawName = request.headers.get('X-File-Name') ?? `school-photo.${mediaType.extension}`
   let name = `school-photo.${mediaType.extension}`
   try {
@@ -273,7 +348,80 @@ async function handleMediaUpload(request: Request, env: Env, allowPdf = false) {
   } catch {
     return json({ error: 'The attachment filename is invalid.' }, 400)
   }
+
+  const key = `${crypto.randomUUID()}.${mediaType.extension}`
+  await env.SITE_MEDIA.put(key, bytes, {
+    httpMetadata: {
+      contentType,
+      cacheControl: 'public, max-age=31536000, immutable',
+      contentDisposition: 'inline',
+    },
+  })
   return json({ url: `/media/${key}`, name, type: contentType })
+}
+
+async function handleMediaDelete(key: string, env: Env) {
+  const storage = env.SITE_MEDIA
+  const database = env.SITE_CONTENT
+  if (!storage || !database) {
+    return json({ error: 'Media cleanup is not configured for this site.' }, 503)
+  }
+  if (!/^[0-9a-f-]{36}\.(?:jpg|png|webp|pdf)$/i.test(key)) {
+    return json({ error: 'The media file name is not valid.' }, 400)
+  }
+  if (!(await storage.head(key))) return json({ error: 'The media file was not found.' }, 404)
+
+  const contentRow = await database.prepare(
+    "SELECT content_json FROM published_content WHERE id = 'main' LIMIT 1",
+  ).first<{ content_json: string }>()
+  if (contentRow) {
+    let content: unknown
+    try {
+      content = JSON.parse(contentRow.content_json)
+    } catch {
+      throw new Error('Published content could not be checked for media references.')
+    }
+    if (collectUploadedMediaKeys(content).includes(key)) {
+      return json({ error: 'This media file is still used by published school content.' }, 409)
+    }
+  }
+
+  const updates = await database.prepare(
+    'SELECT attachments_json FROM school_updates',
+  ).all<{ attachments_json: string }>()
+  for (const update of updates.results) {
+    let attachments: unknown
+    try {
+      attachments = JSON.parse(update.attachments_json)
+    } catch {
+      throw new Error('School announcements could not be checked for media references.')
+    }
+    if (collectUploadedMediaKeys(attachments).includes(key)) {
+      return json({ error: 'This media file is still used by a school announcement.' }, 409)
+    }
+  }
+
+  const cleanupLock = await database.prepare(
+    `INSERT INTO media_cleanup_locks (media_key, created_at)
+     SELECT ?, datetime('now')
+     WHERE NOT EXISTS (SELECT 1 FROM media_references WHERE media_key = ?)
+     ON CONFLICT(media_key) DO NOTHING`,
+  )
+    .bind(key, key)
+    .run()
+  if (!cleanupLock.meta.changes) {
+    return json({ error: 'This media file is still referenced by published content or an announcement.' }, 409)
+  }
+
+  try {
+    await storage.delete(key)
+  } catch (error) {
+    if (await storage.head(key)) {
+      await database.prepare('DELETE FROM media_cleanup_locks WHERE media_key = ?').bind(key).run()
+    }
+    throw error
+  }
+  return json({ deleted: true })
 }
 
 async function handleMediaRead(request: Request, env: Env, key: string) {
@@ -390,12 +538,16 @@ async function handleAdminUpdates(env: Env) {
 }
 
 async function readUpdateInput(request: Request): Promise<SchoolUpdateInput | Response> {
-  const body = await request.arrayBuffer()
-  if (body.byteLength > 50_000) return json({ error: 'Announcement details exceed the 50 KB limit.' }, 413)
+  const body = await readBodyWithinLimit(
+    request,
+    50_000,
+    'Announcement details exceed the 50 KB limit.',
+  )
+  if (body instanceof Response) return body
 
   let input: unknown
   try {
-    input = JSON.parse(new TextDecoder().decode(body))
+    input = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))
   } catch {
     return json({ error: 'Enter valid announcement details.' }, 400)
   }
@@ -410,11 +562,12 @@ async function handleSaveUpdate(
   email: string,
   id: string | null,
 ) {
-  if (!env.SITE_CONTENT) return json({ error: 'The site content database is not configured.' }, 503)
+  const database = env.SITE_CONTENT
+  if (!database) return json({ error: 'The site content database is not configured.' }, 503)
   const input = await readUpdateInput(request)
   if (input instanceof Response) return input
 
-  const duplicate = await env.SITE_CONTENT.prepare(
+  const duplicate = await database.prepare(
     'SELECT id FROM school_updates WHERE slug = ? AND id != ? LIMIT 1',
   )
     .bind(input.slug, id ?? '')
@@ -424,8 +577,8 @@ async function handleSaveUpdate(
   const now = new Date().toISOString()
   let everPublished = false
   if (id) {
-    const existing = await env.SITE_CONTENT.prepare(
-      'SELECT status, published_at, ever_published FROM school_updates WHERE id = ? LIMIT 1',
+    const existing = await database.prepare(
+      'SELECT status, published_at, ever_published, attachments_json FROM school_updates WHERE id = ? LIMIT 1',
     )
       .bind(id)
       .first<{ status: string; published_at: string; ever_published: number }>()
@@ -457,26 +610,35 @@ async function handleSaveUpdate(
     email,
   ]
 
+  let updateStatement: D1PreparedStatement
   if (id) {
-    await env.SITE_CONTENT.prepare(
+    updateStatement = database.prepare(
       `UPDATE school_updates SET slug = ?, title = ?, category = ?, summary = ?, body = ?,
         published_at = ?, effective_at = ?, reopening_at = ?, school_closed = ?, expires_at = ?,
         status = ?, ever_published = ?, pinned = ?, attachments_json = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
-    )
-      .bind(...values.slice(1, 16), email, id)
-      .run()
+    ).bind(...values.slice(1, 16), email, id)
   } else {
-    await env.SITE_CONTENT.prepare(
+    updateStatement = database.prepare(
       `INSERT INTO school_updates
        (id, slug, title, category, summary, body, published_at, effective_at, reopening_at,
         school_closed, expires_at, status, ever_published, pinned, attachments_json, created_at, updated_at, updated_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-      .bind(...values.slice(0, 15), now, now, email)
-      .run()
+    ).bind(...values.slice(0, 15), now, now, email)
   }
+  await database.batch([
+    updateStatement,
+    database.prepare(
+      'DELETE FROM media_references WHERE source_type = ? AND source_id = ?',
+    ).bind('announcement', updateId),
+    ...collectUploadedMediaKeys(input.attachments).map((key) =>
+      database.prepare(
+        `INSERT INTO media_references (media_key, source_type, source_id)
+         SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM school_updates WHERE id = ?)`,
+      ).bind(key, 'announcement', updateId, updateId),
+    ),
+  ])
 
-  const row = await env.SITE_CONTENT.prepare(
+  const row = await database.prepare(
     `SELECT id, slug, title, category, summary, body, published_at, effective_at, reopening_at,
       school_closed, expires_at, status, ever_published, pinned, attachments_json, updated_at
      FROM school_updates WHERE id = ?`,
@@ -488,11 +650,15 @@ async function handleSaveUpdate(
 }
 
 async function handleDeleteUpdate(id: string, env: Env) {
-  if (!env.SITE_CONTENT) return json({ error: 'The site content database is not configured.' }, 503)
-  const result = await env.SITE_CONTENT.prepare('DELETE FROM school_updates WHERE id = ?')
-    .bind(id)
-    .run()
-  if (!result.meta.changes) return json({ error: 'This announcement no longer exists.' }, 404)
+  const database = env.SITE_CONTENT
+  if (!database) return json({ error: 'The site content database is not configured.' }, 503)
+  const results = await database.batch([
+    database.prepare(
+      'DELETE FROM media_references WHERE source_type = ? AND source_id = ?',
+    ).bind('announcement', id),
+    database.prepare('DELETE FROM school_updates WHERE id = ?').bind(id),
+  ])
+  if (!results[1].meta.changes) return json({ error: 'This announcement no longer exists.' }, 404)
   return json({ deleted: true })
 }
 
@@ -510,12 +676,11 @@ async function handleSitemap(request: Request, env: Env) {
   )
     .bind(now)
     .all<{ slug: string; updated_at: string }>()
-  const baseUrl = new URL(request.url).origin
   const updateUrls = rows.results
     .filter((row) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(row.slug))
     .map(
       (row) =>
-        `  <url><loc>${baseUrl}/updates/${row.slug}</loc><lastmod>${row.updated_at.slice(0, 10)}</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>`,
+        `  <url><loc>${SITE_URL}/updates/${row.slug}</loc><lastmod>${row.updated_at.slice(0, 10)}</lastmod><changefreq>monthly</changefreq><priority>0.6</priority></url>`,
     )
     .join('\n')
   const headers = new Headers(response.headers)
@@ -547,22 +712,54 @@ function removeHomepageImagePreload(html: string) {
   return html.replace(/<link\b(?=[^>]*\brel="preload")(?=[^>]*\bas="image")[^>]*>/i, '')
 }
 
+async function handlePublicPage(request: Request, env: Env, path: SeoPath) {
+  const response = await env.ASSETS.fetch(request)
+  if (!response.ok) return response
+
+  const metadata = seo[path]
+  const title = metadata.title.en
+  const description = metadata.description.en
+  const canonicalUrl = `${SITE_URL}${path === '/' ? '/' : path}`
+  let html = await response.text()
+  if (path !== '/') html = removeHomepageImagePreload(html)
+  html = html.replace(/<title>[\s\S]*?<\/title>/i, `<title>${escapeHtml(title)}</title>`)
+  html = html.replace(
+    /<link\s+rel="canonical"[^>]*>/i,
+    `<link rel="canonical" href="${escapeHtml(canonicalUrl)}" />`,
+  )
+  html = replaceMetaTag(html, 'name', 'description', description)
+  html = replaceMetaTag(html, 'name', 'robots', 'index, follow')
+  html = replaceMetaTag(html, 'property', 'og:type', 'website')
+  html = replaceMetaTag(html, 'property', 'og:title', title)
+  html = replaceMetaTag(html, 'property', 'og:description', description)
+  html = replaceMetaTag(html, 'property', 'og:url', canonicalUrl)
+  html = replaceMetaTag(html, 'property', 'og:image', `${SITE_URL}/images/og-royal-public-school.jpg`)
+  html = replaceMetaTag(html, 'name', 'twitter:title', title)
+  html = replaceMetaTag(html, 'name', 'twitter:description', description)
+  html = replaceMetaTag(html, 'name', 'twitter:image', `${SITE_URL}/images/og-royal-public-school.jpg`)
+
+  const headers = new Headers(response.headers)
+  headers.delete('Content-Length')
+  headers.delete('ETag')
+  headers.set('Cache-Control', 'no-store')
+  return new Response(html, { status: response.status, statusText: response.statusText, headers })
+}
+
 async function handleUpdatesIndexPage(request: Request, env: Env) {
   const response = await env.ASSETS.fetch(request)
   if (!response.ok) return response
-  const origin = new URL(request.url).origin
   const title = 'School Updates & Notices | Royal Public School, Baghpat'
   const description =
     'Check the latest school holidays, important notices, exam information, events, admissions and parent updates from Royal Public School, Tatiri, Baghpat.'
   let html = await response.text()
   html = removeHomepageImagePreload(html)
   html = html.replace(/<title>[\s\S]*?<\/title>/i, `<title>${escapeHtml(title)}</title>`)
-  html = html.replace(/<link\s+rel="canonical"[^>]*>/i, `<link rel="canonical" href="${origin}/updates" />`)
+  html = html.replace(/<link\s+rel="canonical"[^>]*>/i, `<link rel="canonical" href="${SITE_URL}/updates" />`)
   html = replaceMetaTag(html, 'name', 'description', description)
   html = replaceMetaTag(html, 'property', 'og:type', 'website')
   html = replaceMetaTag(html, 'property', 'og:title', title)
   html = replaceMetaTag(html, 'property', 'og:description', description)
-  html = replaceMetaTag(html, 'property', 'og:url', `${origin}/updates`)
+  html = replaceMetaTag(html, 'property', 'og:url', `${SITE_URL}/updates`)
   html = replaceMetaTag(html, 'name', 'twitter:title', title)
   html = replaceMetaTag(html, 'name', 'twitter:description', description)
   const headers = new Headers(response.headers)
@@ -574,7 +771,8 @@ async function handleUpdatesIndexPage(request: Request, env: Env) {
 
 async function handleUpdatePage(request: Request, env: Env, slug: string) {
   const response = await env.ASSETS.fetch(request)
-  if (!response.ok || !env.SITE_CONTENT) return response
+  if (!response.ok) return response
+  if (!env.SITE_CONTENT) return json({ error: 'The site content database is not configured.' }, 503)
 
   const now = new Date().toISOString()
   const row = await env.SITE_CONTENT.prepare(
@@ -588,9 +786,27 @@ async function handleUpdatePage(request: Request, env: Env, slug: string) {
     .bind(slug, now, now)
     .first<UpdateRow>()
   const update = row ? toSchoolUpdate(row) : null
-  if (!update) return response
+  if (!update) {
+    let html = await response.text()
+    html = removeHomepageImagePreload(html)
+    html = html.replace(/<title>[\s\S]*?<\/title>/i, '<title>Announcement Not Found | Royal Public School</title>')
+    html = html.replace(/<link\s+rel="canonical"[^>]*>/i, '')
+    html = replaceMetaTag(
+      html,
+      'name',
+      'description',
+      'This school announcement is unavailable or has not been published.',
+    )
+    html = replaceMetaTag(html, 'name', 'robots', 'noindex, nofollow')
+    const headers = new Headers(response.headers)
+    headers.delete('Content-Length')
+    headers.delete('ETag')
+    headers.set('Cache-Control', 'no-store')
+    headers.set('X-Robots-Tag', 'noindex, nofollow')
+    return new Response(html, { status: 404, statusText: 'Not Found', headers })
+  }
 
-  const canonicalUrl = `${new URL(request.url).origin}/updates/${update.slug}`
+  const canonicalUrl = `${SITE_URL}/updates/${update.slug}`
   const htmlDescription = update.summary.slice(0, 300)
   let html = await response.text()
   html = removeHomepageImagePreload(html)
@@ -614,7 +830,7 @@ async function handleUpdatePage(request: Request, env: Env, slug: string) {
     datePublished: update.publishedAt,
     dateModified: update.updatedAt,
     mainEntityOfPage: canonicalUrl,
-    publisher: { '@type': 'Organization', name: 'Royal Public School', url: new URL(request.url).origin },
+    publisher: { '@type': 'Organization', name: 'Royal Public School', url: SITE_URL },
   }).replace(/</g, '\\u003c')
   html = html.replace('</head>', `<script type="application/ld+json">${structuredData}</script></head>`)
 
@@ -625,162 +841,210 @@ async function handleUpdatePage(request: Request, env: Env, slug: string) {
   return new Response(html, { status: response.status, statusText: response.statusText, headers })
 }
 
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url)
+async function routeRequest(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url)
 
-    if (url.pathname === '/api/admin/media' && request.method === 'POST') {
-      const auth = await authenticateAdmin(request, env)
-      if (!('email' in auth)) return errorResponse(auth)
-      try {
-        return await handleMediaUpload(request, env)
-      } catch (error) {
-        console.error('Unable to upload school gallery photo.', error)
-        return json({ error: 'The photo could not be uploaded.' }, 500)
-      }
+  if (
+    url.pathname.startsWith('/api/admin/') &&
+    ['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)
+  ) {
+    const originError = validateAdminMutation(request)
+    if (originError) return originError
+  }
+
+  if (url.pathname === '/api/admin/media' && request.method === 'POST') {
+    const auth = await authenticateAdmin(request, env)
+    if (!('email' in auth)) return errorResponse(auth)
+    try {
+      return await handleMediaUpload(request, env)
+    } catch (error) {
+      console.error('Unable to upload school gallery photo.', error)
+      return json({ error: 'The photo could not be uploaded.' }, 500)
     }
+  }
 
-    if (url.pathname === '/api/admin/update-attachments' && request.method === 'POST') {
-      const auth = await authenticateAdmin(request, env)
-      if (!('email' in auth)) return errorResponse(auth)
-      try {
-        return await handleMediaUpload(request, env, true)
-      } catch (error) {
-        console.error('Unable to upload school update attachment.', error)
-        return json({ error: 'The attachment could not be uploaded.' }, 500)
-      }
+  if (url.pathname === '/api/admin/media' && request.method === 'DELETE') {
+    const auth = await authenticateAdmin(request, env)
+    if (!('email' in auth)) return errorResponse(auth)
+    const key = url.searchParams.get('key')
+    if (!key) return json({ error: 'Choose a media file to clean up.' }, 400)
+    try {
+      return await handleMediaDelete(key, env)
+    } catch (error) {
+      console.error('Unable to safely clean up school media.', error)
+      return json({ error: 'The media file could not be cleaned up.' }, 500)
     }
+  }
 
-    if (url.pathname.startsWith('/media/')) {
-      try {
-        return await handleMediaRead(request, env, url.pathname.slice('/media/'.length))
-      } catch (error) {
-        console.error('Unable to load school gallery photo.', error)
-        return json({ error: 'The photo could not be loaded.' }, 500)
-      }
+  if (url.pathname === '/api/admin/update-attachments' && request.method === 'POST') {
+    const auth = await authenticateAdmin(request, env)
+    if (!('email' in auth)) return errorResponse(auth)
+    try {
+      return await handleMediaUpload(request, env, true)
+    } catch (error) {
+      console.error('Unable to upload school update attachment.', error)
+      return json({ error: 'The attachment could not be uploaded.' }, 500)
     }
+  }
 
-    if (url.pathname === '/api/updates' && request.method === 'GET') {
-      try {
-        return await handlePublicUpdates(url, env)
-      } catch (error) {
-        console.error('Unable to load public school updates.', error)
-        return json({ error: 'School updates could not be loaded.' }, 500)
-      }
+  if (url.pathname.startsWith('/media/')) {
+    try {
+      return await handleMediaRead(request, env, url.pathname.slice('/media/'.length))
+    } catch (error) {
+      console.error('Unable to load school gallery photo.', error)
+      return json({ error: 'The photo could not be loaded.' }, 500)
     }
+  }
 
-    if (url.pathname.startsWith('/api/updates/') && request.method === 'GET') {
-      try {
-        return await handlePublicUpdate(url.pathname.slice('/api/updates/'.length), env)
-      } catch (error) {
-        console.error('Unable to load public school update.', error)
-        return json({ error: 'The school update could not be loaded.' }, 500)
-      }
+  if (url.pathname === '/api/updates' && request.method === 'GET') {
+    try {
+      return await handlePublicUpdates(url, env)
+    } catch (error) {
+      console.error('Unable to load public school updates.', error)
+      return json({ error: 'School updates could not be loaded.' }, 500)
     }
+  }
 
-    if (url.pathname === '/api/admin/updates' && request.method === 'GET') {
-      const auth = await authenticateAdmin(request, env)
-      if (!('email' in auth)) return errorResponse(auth)
-      try {
-        return await handleAdminUpdates(env)
-      } catch (error) {
-        console.error('Unable to load admin school updates.', error)
-        return json({ error: 'School updates could not be loaded.' }, 500)
-      }
+  if (url.pathname.startsWith('/api/updates/') && request.method === 'GET') {
+    try {
+      return await handlePublicUpdate(url.pathname.slice('/api/updates/'.length), env)
+    } catch (error) {
+      console.error('Unable to load public school update.', error)
+      return json({ error: 'The school update could not be loaded.' }, 500)
     }
+  }
 
-    if (url.pathname === '/api/admin/updates' && request.method === 'POST') {
-      const auth = await authenticateAdmin(request, env)
-      if (!('email' in auth)) return errorResponse(auth)
-      try {
-        return await handleSaveUpdate(request, env, auth.email, null)
-      } catch (error) {
-        console.error('Unable to create school update.', error)
-        return json({ error: 'The school update could not be saved.' }, 500)
-      }
+  if (url.pathname === '/api/admin/updates' && request.method === 'GET') {
+    const auth = await authenticateAdmin(request, env)
+    if (!('email' in auth)) return errorResponse(auth)
+    try {
+      return await handleAdminUpdates(env)
+    } catch (error) {
+      console.error('Unable to load admin school updates.', error)
+      return json({ error: 'School updates could not be loaded.' }, 500)
     }
+  }
 
-    const adminUpdateMatch = url.pathname.match(/^\/api\/admin\/updates\/([0-9a-f-]{36})$/i)
-    if (adminUpdateMatch && request.method === 'PUT') {
-      const auth = await authenticateAdmin(request, env)
-      if (!('email' in auth)) return errorResponse(auth)
-      try {
-        return await handleSaveUpdate(request, env, auth.email, adminUpdateMatch[1])
-      } catch (error) {
-        console.error('Unable to update school announcement.', error)
-        return json({ error: 'The school update could not be saved.' }, 500)
-      }
+  if (url.pathname === '/api/admin/updates' && request.method === 'POST') {
+    const auth = await authenticateAdmin(request, env)
+    if (!('email' in auth)) return errorResponse(auth)
+    try {
+      return await handleSaveUpdate(request, env, auth.email, null)
+    } catch (error) {
+      console.error('Unable to create school update.', error)
+      return json({ error: 'The school update could not be saved.' }, 500)
     }
+  }
 
-    if (adminUpdateMatch && request.method === 'DELETE') {
-      const auth = await authenticateAdmin(request, env)
-      if (!('email' in auth)) return errorResponse(auth)
-      try {
-        return await handleDeleteUpdate(adminUpdateMatch[1], env)
-      } catch (error) {
-        console.error('Unable to delete school update.', error)
-        return json({ error: 'The school update could not be deleted.' }, 500)
-      }
+  const adminUpdateMatch = url.pathname.match(/^\/api\/admin\/updates\/([0-9a-f-]{36})$/i)
+  if (adminUpdateMatch && request.method === 'PUT') {
+    const auth = await authenticateAdmin(request, env)
+    if (!('email' in auth)) return errorResponse(auth)
+    try {
+      return await handleSaveUpdate(request, env, auth.email, adminUpdateMatch[1])
+    } catch (error) {
+      console.error('Unable to update school announcement.', error)
+      return json({ error: 'The school update could not be saved.' }, 500)
     }
+  }
 
-    if (url.pathname === '/sitemap.xml' && request.method === 'GET') {
-      try {
-        return await handleSitemap(request, env)
-      } catch (error) {
-        console.error('Unable to add school updates to the sitemap.', error)
-        return env.ASSETS.fetch(request)
-      }
+  if (adminUpdateMatch && request.method === 'DELETE') {
+    const auth = await authenticateAdmin(request, env)
+    if (!('email' in auth)) return errorResponse(auth)
+    try {
+      return await handleDeleteUpdate(adminUpdateMatch[1], env)
+    } catch (error) {
+      console.error('Unable to delete school update.', error)
+      return json({ error: 'The school update could not be deleted.' }, 500)
     }
+  }
 
-    if (url.pathname === '/updates' && request.method === 'GET') {
-      try {
-        return await handleUpdatesIndexPage(request, env)
-      } catch (error) {
-        console.error('Unable to render school updates page metadata.', error)
-        return env.ASSETS.fetch(request)
-      }
-    }
-
-    const updatePageMatch = url.pathname.match(/^\/updates\/([a-z0-9]+(?:-[a-z0-9]+)*)$/)
-    if (updatePageMatch && request.method === 'GET') {
-      try {
-        return await handleUpdatePage(request, env, updatePageMatch[1])
-      } catch (error) {
-        console.error('Unable to render school update metadata.', error)
-        return env.ASSETS.fetch(request)
-      }
-    }
-
-    if (url.pathname === '/api/content' && request.method === 'GET') {
-      try {
-        return await handleContentRead(env)
-      } catch (error) {
-        console.error('Unable to load published school content.', error)
-        return json({ error: 'The published school content could not be loaded.' }, 500)
-      }
-    }
-
-    if (url.pathname === '/api/admin/session' && request.method === 'GET') {
-      const auth = await authenticateAdmin(request, env)
-      return 'email' in auth ? json({ authenticated: true, email: auth.email }) : errorResponse(auth)
-    }
-
-    if (url.pathname === '/api/admin/content' && request.method === 'PUT') {
-      const auth = await authenticateAdmin(request, env)
-      if (!('email' in auth)) return errorResponse(auth)
-      try {
-        return await handleContentPublish(request, env, auth.email)
-      } catch (error) {
-        console.error('Unable to publish school content.', error)
-        return json({ error: 'The content could not be published to the database.' }, 500)
-      }
-    }
-
-    if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
+  if (url.pathname === '/sitemap.xml' && request.method === 'GET') {
+    try {
+      return await handleSitemap(request, env)
+    } catch (error) {
+      console.error('Unable to add school updates to the sitemap.', error)
       return env.ASSETS.fetch(request)
     }
+  }
 
-    if (url.pathname.startsWith('/api/')) return json({ error: 'API route not found.' }, 404)
-    return env.ASSETS.fetch(request)
+  if (url.pathname === '/updates' && request.method === 'GET') {
+    try {
+      return await handleUpdatesIndexPage(request, env)
+    } catch (error) {
+      console.error('Unable to render school updates page metadata.', error)
+      return env.ASSETS.fetch(request)
+    }
+  }
+
+  const updatePageMatch = url.pathname.match(/^\/updates\/([a-z0-9]+(?:-[a-z0-9]+)*)$/)
+  if (updatePageMatch && request.method === 'GET') {
+    try {
+      return await handleUpdatePage(request, env, updatePageMatch[1])
+    } catch (error) {
+      console.error('Unable to render school update metadata.', error)
+      return env.ASSETS.fetch(request)
+    }
+  }
+
+  if (url.pathname === '/api/content' && request.method === 'GET') {
+    try {
+      return await handleContentRead(env)
+    } catch (error) {
+      console.error('Unable to load published school content.', error)
+      return json({ error: 'The published school content could not be loaded.' }, 500)
+    }
+  }
+
+  if (url.pathname === '/api/admin/session' && request.method === 'GET') {
+    const auth = await authenticateAdmin(request, env)
+    return 'email' in auth ? json({ authenticated: true, email: auth.email }) : errorResponse(auth)
+  }
+
+  if (url.pathname === '/api/admin/content' && request.method === 'PUT') {
+    const auth = await authenticateAdmin(request, env)
+    if (!('email' in auth)) return errorResponse(auth)
+    try {
+      return await handleContentPublish(request, env, auth.email)
+    } catch (error) {
+      console.error('Unable to publish school content.', error)
+      return json({ error: 'The content could not be published to the database.' }, 500)
+    }
+  }
+
+  if (url.pathname === '/admin' || url.pathname.startsWith('/admin/')) {
+    const response = await env.ASSETS.fetch(request)
+    if (!response.ok) return response
+    let html = await response.text()
+    html = replaceMetaTag(html, 'name', 'robots', 'noindex, nofollow')
+    const headers = new Headers(response.headers)
+    headers.delete('Content-Length')
+    headers.delete('ETag')
+    headers.set('Cache-Control', 'no-store')
+    headers.set('X-Robots-Tag', 'noindex, nofollow')
+    return new Response(html, { status: response.status, statusText: response.statusText, headers })
+  }
+
+  const normalizedPath = url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') : url.pathname
+  if (
+    request.method === 'GET' &&
+    Object.hasOwn(seo, normalizedPath) &&
+    normalizedPath !== '/updates'
+  ) {
+    return handlePublicPage(request, env, normalizedPath as SeoPath)
+  }
+
+  if (url.pathname.startsWith('/api/')) return json({ error: 'API route not found.' }, 404)
+  return env.ASSETS.fetch(request)
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    try {
+      return withSecurityHeaders(await routeRequest(request, env))
+    } catch (error) {
+      console.error('Unhandled Pages Function request failure.', error)
+      return withSecurityHeaders(json({ error: 'The request could not be completed.' }, 500))
+    }
   },
 }

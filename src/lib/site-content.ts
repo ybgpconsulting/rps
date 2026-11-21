@@ -1,17 +1,25 @@
 import {
   applySiteContent,
+  collectUploadedMediaKeys,
   createContentSnapshot,
   createDefaultContentSnapshot,
   migrateSiteContent,
   validateSiteContent,
   type SiteContent,
 } from './content-model'
+import { cleanupUnreferencedMedia } from './media'
 
 const localContentKey = 'rps-admin-local-content'
 const previewContentPrefix = 'rps-admin-preview:'
+let siteContentInitialization: Promise<boolean> | undefined
 
 function isJsonResponse(response: Response) {
   return response.headers.get('content-type')?.includes('application/json') === true
+}
+
+function applyContentAndNotify(content: unknown) {
+  applySiteContent(content)
+  window.dispatchEvent(new Event('rps:site-content-updated'))
 }
 
 function readLocalContent() {
@@ -44,7 +52,7 @@ function applyPreviewContent() {
       console.error(`The preview content is invalid: ${error}`)
       return false
     }
-    applySiteContent(migratedContent)
+    applyContentAndNotify(migratedContent)
     return true
   } catch (error) {
     console.error('Unable to load the content preview.', error)
@@ -52,15 +60,20 @@ function applyPreviewContent() {
   }
 }
 
-export async function initializeSiteContent() {
-  if (applyPreviewContent()) return
+export function initializeSiteContent() {
+  if (!siteContentInitialization) siteContentInitialization = loadSiteContent()
+  return siteContentInitialization
+}
+
+async function loadSiteContent(): Promise<boolean> {
+  if (applyPreviewContent()) return true
 
   if (import.meta.env.DEV) {
     const localContent = readLocalContent()
     if (localContent) {
-      applySiteContent(localContent)
+      applyContentAndNotify(localContent)
     }
-    return
+    return true
   }
 
   try {
@@ -73,9 +86,11 @@ export async function initializeSiteContent() {
     const content = migrateSiteContent(await response.json())
     const validationError = validateSiteContent(content)
     if (validationError) throw new Error(`The published site content is invalid: ${validationError}`)
-    applySiteContent(content)
+    applyContentAndNotify(content)
+    return true
   } catch (error) {
     console.error('Unable to load published school content; the built-in content will be shown.', error)
+    return false
   }
 }
 
@@ -96,11 +111,16 @@ export async function getAdminSession(): Promise<{ email: string; localOnly: boo
 export async function publishSiteContent(content: SiteContent) {
   const validationError = validateSiteContent(content)
   if (validationError) throw new Error(validationError)
+  const previousMediaKeys = new Set(collectUploadedMediaKeys(createContentSnapshot()))
+  const nextMediaKeys = new Set(collectUploadedMediaKeys(content))
+  const removedMediaUrls = [...previousMediaKeys]
+    .filter((key) => !nextMediaKeys.has(key))
+    .map((key) => `/media/${key}`)
 
   if (import.meta.env.DEV) {
     window.localStorage.setItem(localContentKey, JSON.stringify(content))
-    applySiteContent(content)
-    return { localOnly: true }
+    applyContentAndNotify(content)
+    return { localOnly: true, cleanupWarning: null }
   }
 
   const response = await fetch('/api/admin/content', {
@@ -121,8 +141,9 @@ export async function publishSiteContent(content: SiteContent) {
     throw new Error(result.error ?? `Publishing failed with status ${response.status}.`)
   }
 
-  applySiteContent(result.content)
-  return { localOnly: false, updatedAt: result.updatedAt }
+  applyContentAndNotify(result.content)
+  const cleanupWarning = await cleanupUnreferencedMedia(removedMediaUrls)
+  return { localOnly: false, updatedAt: result.updatedAt, cleanupWarning }
 }
 
 export function getCurrentSiteContent() {

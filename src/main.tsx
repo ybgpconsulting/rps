@@ -12,22 +12,28 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import { LanguageProvider } from './i18n'
-import { initializeSiteContent } from './lib/site-content'
 
-async function startApplication() {
-  await initializeSiteContent()
-  const root = document.getElementById('root')
-  if (!root) throw new Error('The application root element was not found.')
+const rootElement = document.getElementById('root')
+if (!rootElement) throw new Error('The application root element was not found.')
 
-  createRoot(root).render(
-    <StrictMode>
-      <LanguageProvider>
-        <BrowserRouter>
-          <App />
-        </BrowserRouter>
-      </LanguageProvider>
-    </StrictMode>,
+createRoot(rootElement).render(
+  <StrictMode>
+    <LanguageProvider>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </LanguageProvider>
+  </StrictMode>,
+)
+
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener(
+    'load',
+    () => {
+      void navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch((error: unknown) => {
+        console.error('Unable to register the offline support service worker.', error)
+      })
+    },
+    { once: true },
   )
 }
-
-void startApplication()

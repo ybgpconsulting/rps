@@ -1,5 +1,5 @@
 import { AnimatePresence } from 'framer-motion'
-import { Suspense, lazy, useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { Route, Routes, useLocation } from 'react-router-dom'
 import { BottomDock } from './components/BottomDock'
 import { Footer } from './components/Footer'
@@ -10,6 +10,7 @@ import { ScrollProgress } from './components/ScrollProgress'
 import { WhatsAppFab } from './components/WhatsAppFab'
 import { useLanguage } from './i18n'
 import { useLockBodyScroll } from './lib/hooks'
+import { initializeSiteContent } from './lib/site-content'
 const Admin = lazy(() => import('./pages/Admin'))
 const About = lazy(() => import('./pages/About'))
 const Academics = lazy(() => import('./pages/Academics'))
@@ -24,6 +25,7 @@ const Terms = lazy(() => import('./pages/Legal').then(({ Terms }) => ({ default:
 const NotFound = lazy(() => import('./pages/NotFound'))
 const VisionMission = lazy(() => import('./pages/VisionMission'))
 const Updates = lazy(() => import('./pages/Updates'))
+const Transport = lazy(() => import('./pages/Transport'))
 
 function ScrollManager() {
   const { pathname, hash } = useLocation()
@@ -46,9 +48,21 @@ export default function App() {
   const { t } = useLanguage()
   const location = useLocation()
   const [booting, setBooting] = useState(true)
+  const [, refreshSiteContent] = useState(0)
+  const contentLoadStarted = useRef(false)
   const isAdminRoute = location.pathname.startsWith('/admin')
   const isPreview = new URLSearchParams(location.search).has('preview')
   useLockBodyScroll(booting && !isAdminRoute)
+
+  useEffect(() => {
+    const handleContentUpdate = () => refreshSiteContent((version) => version + 1)
+    window.addEventListener('rps:site-content-updated', handleContentUpdate)
+    if (!contentLoadStarted.current) {
+      contentLoadStarted.current = true
+      void initializeSiteContent()
+    }
+    return () => window.removeEventListener('rps:site-content-updated', handleContentUpdate)
+  }, [])
 
   if (isAdminRoute) {
     return (
@@ -94,6 +108,7 @@ export default function App() {
               <Route path="/vision-mission" element={<VisionMission />} />
               <Route path="/academics" element={<Academics />} />
               <Route path="/facilities" element={<Facilities />} />
+              <Route path="/transport" element={<Transport />} />
               <Route path="/campus-life" element={<CampusLife />} />
               <Route path="/gallery" element={<Gallery />} />
               <Route path="/updates" element={<Updates />} />

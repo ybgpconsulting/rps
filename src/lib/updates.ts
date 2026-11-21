@@ -91,9 +91,8 @@ export async function getPublicUpdate(slug: string): Promise<SchoolUpdate> {
       (item) =>
         item.slug === slug &&
         Date.parse(item.publishedAt) <= now &&
-        (        (item.status === 'archived' && item.everPublished) ||
-          (['published', 'scheduled'].includes(item.status) &&
-            (!item.expiresAt || Date.parse(item.expiresAt) > now))),
+        ((item.status === 'archived' && item.everPublished) ||
+          ['published', 'scheduled'].includes(item.status)),
     )
     if (!update) throw new Error('This announcement is not available.')
     return update

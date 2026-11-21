@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { Icon } from '../components/Icon'
-import { validateSiteContent, type SiteContent } from '../lib/content-model'
+import {
+  collectUploadedMediaKeys,
+  validateSiteContent,
+  type SiteContent,
+} from '../lib/content-model'
+import { cleanupUnreferencedMedia } from '../lib/media'
 import {
   getAdminSession,
   getCurrentSiteContent,
+  initializeSiteContent,
   publishSiteContent,
   savePreviewContent,
 } from '../lib/site-content'
@@ -208,6 +214,8 @@ export default function Admin() {
   const [session, setSession] = useState<{ email: string; localOnly: boolean } | null>(null)
   const [sessionError, setSessionError] = useState('')
   const [content, setContent] = useState<SiteContent>(() => getCurrentSiteContent())
+  const [siteContentReady, setSiteContentReady] = useState(false)
+  const [siteContentError, setSiteContentError] = useState('')
   const [selectedPanel, setSelectedPanel] = useState<PanelId>('school')
   const [isPublishing, setIsPublishing] = useState(false)
   const [uploadStatus, setUploadStatus] = useState('')
@@ -224,6 +232,7 @@ export default function Admin() {
   const [updateNotice, setUpdateNotice] = useState('')
   const fileInput = useRef<HTMLInputElement>(null)
   const attachmentInput = useRef<HTMLInputElement>(null)
+  const hasUnsavedContent = useRef(false)
   const photos = getPhotos(content)
   const school = isRecord(content.school) ? content.school : {}
   const schoolName = isRecord(school.name) ? school.name : {}
@@ -233,6 +242,31 @@ export default function Admin() {
   const transport = isRecord(content.transport) ? content.transport : {}
   const instagram = isRecord(content.instagram) ? content.instagram : {}
   const socialLinks = isRecord(content.socialLinks) ? content.socialLinks : {}
+
+  useEffect(() => {
+    const handleContentUpdate = () => {
+      if (!hasUnsavedContent.current) setContent(getCurrentSiteContent())
+    }
+    window.addEventListener('rps:site-content-updated', handleContentUpdate)
+    return () => window.removeEventListener('rps:site-content-updated', handleContentUpdate)
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    void initializeSiteContent().then((loaded) => {
+      if (!active) return
+      setContent(getCurrentSiteContent())
+      setSiteContentReady(true)
+      if (!loaded) {
+        setSiteContentError(
+          'Published website details could not be loaded. Editing is disabled to prevent overwriting existing content.',
+        )
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -275,6 +309,7 @@ export default function Admin() {
   function updateField(path: ContentPath, value: unknown) {
     const updated = updateAtPath(content, path, value)
     if (!isRecord(updated)) throw new Error('The website details are invalid.')
+    hasUnsavedContent.current = true
     setContent(updated)
     setNotice('')
     setPublishError('')
@@ -284,6 +319,7 @@ export default function Admin() {
     let updated = updateAtPath(content, ['school', 'phoneDisplay'], value)
     updated = updateAtPath(updated, ['school', 'phoneHref'], `tel:${value.replace(/\D/g, '')}`)
     if (!isRecord(updated)) throw new Error('The school phone number could not be updated.')
+    hasUnsavedContent.current = true
     setContent(updated)
     setNotice('')
     setPublishError('')
@@ -293,6 +329,7 @@ export default function Admin() {
     let updated = updateAtPath(content, ['galleryItems', index, 'title', language], value)
     updated = updateAtPath(updated, ['galleryItems', index, 'alt', language], value)
     if (!isRecord(updated)) throw new Error('The photo title could not be updated.')
+    hasUnsavedContent.current = true
     setContent(updated)
     setNotice('')
     setPublishError('')
@@ -342,6 +379,7 @@ export default function Admin() {
       const updated = { ...content, galleryItems: [...photos, ...additions] }
       const validationError = validateSiteContent(updated)
       if (validationError) throw new Error(validationError)
+      hasUnsavedContent.current = true
       setContent(updated)
       setNotice(`${additions.length} photo${additions.length === 1 ? '' : 's'} added to the gallery. Publish to make them live.`)
     } catch (error) {
@@ -422,17 +460,27 @@ export default function Admin() {
         pinned: updateForm.pinned,
         attachments: updateForm.attachments,
       }
+      const previousAttachments = updates.find((update) => update.id === updateForm.id)?.attachments ?? []
+      const previousMediaKeys = new Set(collectUploadedMediaKeys(previousAttachments))
+      const nextMediaKeys = new Set(collectUploadedMediaKeys(input.attachments))
       const saved = await saveSchoolUpdate(input, updateForm.id)
       setUpdates((current) => [saved, ...current.filter((item) => item.id !== saved.id)])
       setUpdateForm(formFromUpdate(saved))
-      setUpdateNotice(
+      const cleanupWarning = await cleanupUnreferencedMedia(
+        [...previousMediaKeys]
+          .filter((key) => !nextMediaKeys.has(key))
+          .map((key) => `/media/${key}`),
+      )
+      const savedNotice =
         saved.status === 'draft'
           ? 'Draft saved. It is not visible to parents.'
           : saved.status === 'scheduled'
             ? 'Announcement scheduled. It will appear automatically at the selected IST time.'
             : saved.status === 'archived'
               ? 'Announcement archived.'
-              : 'Announcement published and now available to parents.',
+              : 'Announcement published and now available to parents.'
+      setUpdateNotice(
+        cleanupWarning ? `${savedNotice} ${cleanupWarning}` : savedNotice,
       )
     } catch (error) {
       setUpdateError(error instanceof Error ? error.message : 'The announcement could not be saved.')
@@ -449,13 +497,19 @@ export default function Admin() {
       await deleteSchoolUpdate(update.id)
       setUpdates((current) => current.filter((item) => item.id !== update.id))
       if (updateForm.id === update.id) startNewUpdate()
-      setUpdateNotice('Announcement deleted.')
+      const cleanupWarning = await cleanupUnreferencedMedia(
+        collectUploadedMediaKeys(update.attachments).map((key) => `/media/${key}`),
+      )
+      setUpdateNotice(
+        cleanupWarning ? `Announcement deleted. ${cleanupWarning}` : 'Announcement deleted.',
+      )
     } catch (error) {
       setUpdateError(error instanceof Error ? error.message : 'The announcement could not be deleted.')
     }
   }
 
   function removePhoto(index: number) {
+    hasUnsavedContent.current = true
     setContent({ ...content, galleryItems: photos.filter((_, photoIndex) => photoIndex !== index) })
     setNotice('Photo removed from the gallery. Publish to update the live website.')
   }
@@ -474,11 +528,14 @@ export default function Admin() {
     setNotice('')
     try {
       const result = await publishSiteContent(content)
+      hasUnsavedContent.current = false
       setSession((current) => current && { ...current, localOnly: result.localOnly })
       setNotice(
         result.localOnly
           ? 'Saved on this browser only. Configure Cloudflare to publish for everyone.'
-          : 'Published successfully. Visitors will now see these changes.',
+          : result.cleanupWarning
+            ? `Published successfully. Visitors will now see these changes. ${result.cleanupWarning}`
+            : 'Published successfully. Visitors will now see these changes.',
       )
     } catch (error) {
       setPublishError(error instanceof Error ? error.message : 'The content could not be published.')
@@ -506,6 +563,33 @@ export default function Admin() {
           <a className="mt-7 inline-flex min-h-11 items-center rounded-full bg-[#10264a] px-6 text-sm font-semibold text-white" href="/admin">
             Check access again
           </a>
+        </section>
+      </main>
+    )
+  }
+
+  if (!siteContentReady) {
+    return (
+      <main className="flex min-h-svh items-center justify-center bg-[#f4f6f9] px-5 text-[#17263e]">
+        <p role="status" className="text-sm font-medium text-slate-600">Loading saved website details…</p>
+      </main>
+    )
+  }
+
+  if (siteContentError) {
+    return (
+      <main className="flex min-h-svh items-center justify-center bg-[#f4f6f9] px-5 py-12 text-[#17263e]">
+        <section className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-8 shadow-xl shadow-slate-900/5 sm:p-10">
+          <p className="text-xs font-bold uppercase tracking-[0.18em] text-amber-700">Website content</p>
+          <h1 className="mt-4 font-display text-3xl font-semibold">Editing is temporarily unavailable.</h1>
+          <p className="mt-4 text-sm leading-6 text-slate-600">{siteContentError}</p>
+          <button
+            type="button"
+            className="mt-7 inline-flex min-h-11 items-center rounded-full bg-[#10264a] px-6 text-sm font-semibold text-white"
+            onClick={() => window.location.reload()}
+          >
+            Try again
+          </button>
         </section>
       </main>
     )

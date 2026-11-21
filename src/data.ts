@@ -1,9 +1,8 @@
 import type { DictionaryKey, Localized } from './i18n'
 import type { IconName } from './components/Icon'
+import { SITE_URL } from '../site-config.mjs'
 
-export const SITE_URL = (
-  (import.meta.env?.VITE_SITE_URL as string | undefined) ?? 'https://rpsbaghpat.in'
-).replace(/\/+$/, '')
+export { SITE_URL }
 
 export const school = {
   name: { en: 'Royal Public School', hi: 'रॉयल पब्लिक स्कूल' } satisfies Localized,
@@ -90,6 +89,7 @@ export const navItems: { to: string; key: DictionaryKey }[] = [
   { to: '/about', key: 'nav.about' },
   { to: '/academics', key: 'nav.academics' },
   { to: '/facilities', key: 'nav.facilities' },
+  { to: '/transport', key: 'nav.transport' },
   { to: '/campus-life', key: 'nav.campus' },
   { to: '/gallery', key: 'nav.gallery' },
   { to: '/admissions', key: 'nav.admissions' },
@@ -107,6 +107,7 @@ export const footerLinks = {
   explore: [
     { to: '/academics', key: 'nav.academics' },
     { to: '/facilities', key: 'nav.facilities' },
+    { to: '/transport', key: 'nav.transport' },
     { to: '/campus-life', key: 'nav.campus' },
     { to: '/gallery', key: 'nav.gallery' },
   ] as { to: string; key: DictionaryKey }[],
@@ -965,6 +966,13 @@ export const seo = {
     description: {
       en: 'Air-conditioned classrooms, science laboratories, library, sports, and safe campus spaces at Royal Public School, Tatiri, Baghpat.',
       hi: 'रॉयल पब्लिक स्कूल, ततिरी, बागपत में वातानुकूलित कक्षाएँ, विज्ञान प्रयोगशालाएँ, पुस्तकालय, खेल और सुरक्षित परिसर।',
+    },
+  },
+  '/transport': {
+    title: { en: 'School Transport in Tatiri & Baghpat | Royal Public School', hi: 'ततिरी और बागपत में स्कूल परिवहन | रॉयल पब्लिक स्कूल' },
+    description: {
+      en: 'Learn about school-owned, fully air-conditioned transport at Royal Public School, Tatiri. Contact the school to confirm routes and pickup availability.',
+      hi: 'रॉयल पब्लिक स्कूल, ततिरी की स्कूल-स्वामित्व वाली पूर्णतः वातानुकूलित परिवहन सुविधा जानें। मार्ग और पिकअप उपलब्धता की पुष्टि के लिए स्कूल से संपर्क करें।',
     },
   },
   '/campus-life': {

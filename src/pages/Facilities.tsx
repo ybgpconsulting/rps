@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { AdmissionsCta } from '../components/AdmissionsCta'
 import { Icon } from '../components/Icon'
 import { Page } from '../components/Page'
@@ -7,7 +8,7 @@ import { Reveal } from '../components/Reveal'
 import { SectionHeading } from '../components/SectionHeading'
 import { SmartImage } from '../components/SmartImage'
 import { TiltCard } from '../components/TiltCard'
-import { acFeature, facilitiesCopy, facilityItems, school } from '../data'
+import { acFeature, facilitiesCopy, facilityItems, school, transport } from '../data'
 import { useLanguage } from '../i18n'
 import { usePageSeo } from '../lib/seo'
 
@@ -157,6 +158,24 @@ export default function Facilities() {
               <p className="mt-4 max-w-3xl text-[11px] leading-relaxed text-ink/45">
                 {tl(facilitiesCopy.note)}
               </p>
+            </div>
+          </Reveal>
+
+          <Reveal delay={0.2}>
+            <div className="mt-6 flex flex-col gap-5 rounded-[22px] border border-royal/10 bg-royal-deep p-6 text-white sm:flex-row sm:items-center sm:justify-between sm:p-8">
+              <div className="max-w-3xl">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gold">
+                  {tl({ en: 'School transport', hi: 'स्कूल परिवहन' })}
+                </p>
+                <h3 className="mt-2 font-display text-2xl leading-tight">
+                  {tl(transport.title)}
+                </h3>
+                <p className="mt-2 text-sm leading-relaxed text-white/65">{tl(transport.body)}</p>
+              </div>
+              <Link to="/transport" className="btn-gold shrink-0">
+                {tl({ en: 'Explore transport', hi: 'परिवहन देखें' })}
+                <Icon name="arrowRight" className="h-4 w-4" />
+              </Link>
             </div>
           </Reveal>
         </div>

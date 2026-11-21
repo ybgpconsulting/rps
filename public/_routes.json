@@ -1,5 +1,26 @@
 {
   "version": 1,
-  "include": ["/api", "/api/*", "/media/*", "/sitemap.xml", "/updates", "/updates/*"],
+  "include": [
+    "/",
+    "/about",
+    "/vision-mission",
+    "/academics",
+    "/facilities",
+    "/transport",
+    "/campus-life",
+    "/gallery",
+    "/updates",
+    "/updates/*",
+    "/admissions",
+    "/contact",
+    "/privacy",
+    "/terms",
+    "/admin",
+    "/admin/*",
+    "/api",
+    "/api/*",
+    "/media/*",
+    "/sitemap.xml"
+  ],
   "exclude": []
 }

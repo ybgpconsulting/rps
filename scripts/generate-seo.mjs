@@ -1,6 +1,7 @@
 import { writeFile, mkdir } from 'node:fs/promises'
+import { SITE_URL } from '../site-config.mjs'
 
-const base = (process.env.SITE_URL || 'https://rpsbaghpat.in').replace(/\/+$/, '')
+const base = SITE_URL.replace(/\/+$/, '')
 
 const routes = [
   '/',
@@ -8,6 +9,7 @@ const routes = [
   '/vision-mission',
   '/academics',
   '/facilities',
+  '/transport',
   '/campus-life',
   '/gallery',
   '/updates',
@@ -28,7 +30,7 @@ const urls = routes
 
 const sitemap = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`
 
-const robots = `User-agent: *\nAllow: /\n\nSitemap: ${base}/sitemap.xml\n`
+const robots = `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /api/\n\nSitemap: ${base}/sitemap.xml\n`
 
 await mkdir('public', { recursive: true })
 await writeFile('public/sitemap.xml', sitemap)

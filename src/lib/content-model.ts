@@ -72,13 +72,30 @@ export function migrateSiteContent(value: unknown): unknown {
     const updatesLink = data.navItems.find((item) => item.to === '/updates')
     if (updatesLink) migrated.navItems.splice(1, 0, structuredClone(updatesLink))
   }
+  if (Array.isArray(migrated.navItems) && !migrated.navItems.some((item) => isRecord(item) && item.to === '/transport')) {
+    const transportIndex = data.navItems.findIndex((item) => item.to === '/transport')
+    if (transportIndex >= 0) {
+      migrated.navItems.splice(transportIndex, 0, structuredClone(data.navItems[transportIndex]))
+    }
+  }
   if (isRecord(migrated.footerLinks) && Array.isArray(migrated.footerLinks.quick) &&
       !migrated.footerLinks.quick.some((item) => isRecord(item) && item.to === '/updates')) {
     const updatesLink = data.footerLinks.quick.find((item) => item.to === '/updates')
     if (updatesLink) migrated.footerLinks.quick.unshift(structuredClone(updatesLink))
   }
+  if (isRecord(migrated.footerLinks) && Array.isArray(migrated.footerLinks.explore) &&
+      !migrated.footerLinks.explore.some((item) => isRecord(item) && item.to === '/transport')) {
+    const transportLink = data.footerLinks.explore.find((item) => item.to === '/transport')
+    const transportIndex = data.footerLinks.explore.findIndex((item) => item.to === '/transport')
+    if (transportLink && transportIndex >= 0) {
+      migrated.footerLinks.explore.splice(transportIndex, 0, structuredClone(transportLink))
+    }
+  }
   if (isRecord(migrated.seo) && !('/updates' in migrated.seo)) {
     migrated.seo['/updates'] = structuredClone(data.seo['/updates'])
+  }
+  if (isRecord(migrated.seo) && !('/transport' in migrated.seo)) {
+    migrated.seo['/transport'] = structuredClone(data.seo['/transport'])
   }
   if (isRecord(migrated.dictionary)) {
     delete migrated.dictionary['footer.note']
@@ -248,6 +265,26 @@ export function createDefaultContentSnapshot(): SiteContent {
 
 export function createContentSnapshot(): SiteContent {
   return structuredClone(mutableContent)
+}
+
+export function collectUploadedMediaKeys(value: unknown): string[] {
+  const keys = new Set<string>()
+  const visit = (child: unknown) => {
+    if (typeof child === 'string') {
+      const match = child.match(/(?:^|\/)media\/([0-9a-f-]{36}\.(?:jpg|png|webp|pdf))$/i)
+      if (match) keys.add(match[1])
+      return
+    }
+    if (Array.isArray(child)) {
+      child.forEach(visit)
+      return
+    }
+    if (typeof child === 'object' && child !== null) {
+      Object.values(child).forEach(visit)
+    }
+  }
+  visit(value)
+  return [...keys]
 }
 
 function synchronizeValue(target: unknown, source: unknown): unknown {

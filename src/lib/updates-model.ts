@@ -130,6 +130,9 @@ export function toSchoolUpdate(row: Record<string, unknown>): SchoolUpdate | nul
   } catch {
     return null
   }
+  const publishedAt = String(row.published_at)
+  const scheduledPublicationReached =
+    row.status === 'scheduled' && Number.isFinite(Date.parse(publishedAt)) && Date.parse(publishedAt) <= Date.now()
   const update: SchoolUpdate = {
     id: String(row.id),
     slug: String(row.slug),
@@ -137,13 +140,13 @@ export function toSchoolUpdate(row: Record<string, unknown>): SchoolUpdate | nul
     category: row.category as UpdateCategory,
     summary: String(row.summary),
     body: String(row.body),
-    publishedAt: String(row.published_at),
+    publishedAt,
     effectiveAt: row.effective_at === null ? null : String(row.effective_at),
     reopeningAt: row.reopening_at === null ? null : String(row.reopening_at),
     schoolClosed: row.school_closed === null ? null : Number(row.school_closed) === 1,
     expiresAt: row.expires_at === null ? null : String(row.expires_at),
-    status: row.status as UpdateStatus,
-    everPublished: Number(row.ever_published) === 1,
+    status: scheduledPublicationReached ? 'published' : row.status as UpdateStatus,
+    everPublished: Number(row.ever_published) === 1 || scheduledPublicationReached,
     pinned: Number(row.pinned) === 1,
     attachments: Array.isArray(attachments) ? attachments as UpdateAttachment[] : [],
     updatedAt: String(row.updated_at),
