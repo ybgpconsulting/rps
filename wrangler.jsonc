@@ -1,8 +1,40 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "royalpublicschool-tatiri",
-  "pages_build_output_dir": "./dist/client",
+  "main": "./worker/index.ts",
   "compatibility_date": "2026-11-19",
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    "directory": "./dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/",
+      "/about*",
+      "/vision-mission*",
+      "/academics*",
+      "/facilities*",
+      "/transport*",
+      "/campus-life*",
+      "/gallery*",
+      "/updates*",
+      "/admin*",
+      "/admissions*",
+      "/contact*",
+      "/privacy*",
+      "/terms*",
+      "/api*",
+      "/media/*",
+      "/sitemap.xml"
+    ]
+  },
+  "routes": [
+    {
+      "pattern": "theroyalpublicschool.in/*",
+      "zone_name": "theroyalpublicschool.in"
+    }
+  ],
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1,
@@ -20,14 +52,9 @@
   "d1_databases": [
     {
       "binding": "SITE_CONTENT",
-      "database_name": "royal-public-school-content",
+      "database_name": "rps",
+      "database_id": "785dc074-efc1-4ec0-b514-8f353671ee59",
       "migrations_dir": "migrations"
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "SITE_MEDIA",
-      "bucket_name": "royal-public-school-media"
     }
   ],
   "env": {

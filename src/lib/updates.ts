@@ -147,7 +147,7 @@ export async function deleteSchoolUpdate(id: string): Promise<void> {
 }
 
 export async function uploadUpdateAttachment(file: File): Promise<UpdateAttachment> {
-  if (import.meta.env.DEV) throw new Error('File attachments need the deployed Cloudflare Pages project and R2 storage.')
+  if (import.meta.env.DEV) throw new Error('File attachments need the deployed Cloudflare Worker and R2 storage.')
   const response = await fetch('/api/admin/update-attachments', {
     method: 'POST',
     headers: {

@@ -342,7 +342,7 @@ export default function Admin() {
     setNotice('')
     if (files.length === 0) return
     if (session?.localOnly) {
-      setUploadError('Photo uploads need the Cloudflare Pages project and R2 storage configured. They are unavailable in local-only mode.')
+      setUploadError('Photo uploads need the Cloudflare Worker and R2 storage configured. They are unavailable in local-only mode.')
       return
     }
     if (photos.length + files.length > 40) {
@@ -417,7 +417,7 @@ export default function Admin() {
       return
     }
     if (session?.localOnly) {
-      setUpdateError('File attachments need the deployed Cloudflare Pages project and R2 storage.')
+      setUpdateError('File attachments need the deployed Cloudflare Worker and R2 storage.')
       return
     }
 

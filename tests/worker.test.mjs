@@ -406,17 +406,17 @@ test('serves built-in content when no published D1 row exists', async () => {
 test('returns route-specific canonical and social metadata for public pages', async () => {
   const html = `<!doctype html><html><head>
     <title>Royal Public School</title>
-    <link rel="canonical" href="https://rpsbaghpat.in/" />
+    <link rel="canonical" href="https://theroyalpublicschool.in/" />
     <meta name="description" content="Home" />
     <meta name="robots" content="index, follow" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Home" />
     <meta property="og:description" content="Home" />
-    <meta property="og:url" content="https://rpsbaghpat.in/" />
-    <meta property="og:image" content="https://rpsbaghpat.in/image.jpg" />
+    <meta property="og:url" content="https://theroyalpublicschool.in/" />
+    <meta property="og:image" content="https://theroyalpublicschool.in/image.jpg" />
     <meta name="twitter:title" content="Home" />
     <meta name="twitter:description" content="Home" />
-    <meta name="twitter:image" content="https://rpsbaghpat.in/image.jpg" />
+    <meta name="twitter:image" content="https://theroyalpublicschool.in/image.jpg" />
   </head><body></body></html>`
   const response = await request(
     '/transport',
@@ -429,8 +429,8 @@ test('returns route-specific canonical and social metadata for public pages', as
 
   assert.equal(response.status, 200)
   assert.match(body, /<title>School Transport in Tatiri &amp; Baghpat \| Royal Public School<\/title>/)
-  assert.match(body, /rel="canonical" href="https:\/\/rpsbaghpat\.in\/transport"/)
-  assert.match(body, /og:url" content="https:\/\/rpsbaghpat\.in\/transport"/)
+  assert.match(body, /rel="canonical" href="https:\/\/theroyalpublicschool\.in\/transport"/)
+  assert.match(body, /og:url" content="https:\/\/theroyalpublicschool\.in\/transport"/)
 })
 
 test('marks the admin page noindex and prevents browser caching', async () => {

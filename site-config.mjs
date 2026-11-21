@@ -1,1 +1,1 @@
-export const SITE_URL = 'https://rpsbaghpat.in'
+export const SITE_URL = 'https://theroyalpublicschool.in'

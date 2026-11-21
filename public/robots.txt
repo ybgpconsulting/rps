@@ -3,4 +3,4 @@ Allow: /
 Disallow: /admin
 Disallow: /api/
 
-Sitemap: https://rpsbaghpat.in/sitemap.xml
+Sitemap: https://theroyalpublicschool.in/sitemap.xml

@@ -12,8 +12,9 @@ import {
 } from '../src/lib/updates-model'
 import { SITE_URL, seo, type SeoPath } from '../src/data'
 
-type Env = Cloudflare.Env & {
+type Env = Omit<Cloudflare.Env, 'SITE_MEDIA'> & {
   ASSETS: { fetch: typeof fetch }
+  SITE_MEDIA?: R2Bucket
   ACCESS_TEAM_DOMAIN?: string
   ACCESS_AUD?: string
   ADMIN_EMAIL?: string
@@ -1043,7 +1044,7 @@ export default {
     try {
       return withSecurityHeaders(await routeRequest(request, env))
     } catch (error) {
-      console.error('Unhandled Pages Function request failure.', error)
+      console.error('Unhandled Cloudflare Worker request failure.', error)
       return withSecurityHeaders(json({ error: 'The request could not be completed.' }, 500))
     }
   },

@@ -9,11 +9,11 @@
     "lint": "oxlint src worker functions",
     "typecheck": "tsc -b && tsc --noEmit -p tsconfig.worker.json",
     "test": "node --experimental-strip-types --experimental-loader ./tests/ts-loader.mjs --test tests/*.test.mjs",
-    "preview": "wrangler pages dev dist/client",
-    "db:migrate": "wrangler d1 migrations apply royal-public-school-content --remote",
+    "preview": "wrangler dev",
+    "db:migrate": "wrangler d1 migrations apply rps --remote --env=\"\"",
     "db:migrate:preview": "wrangler d1 migrations apply royal-public-school-content-preview --remote --env preview",
-    "db:migrate:local": "wrangler d1 migrations apply royal-public-school-content --local",
-    "deploy": "npm run build && wrangler pages deploy dist/client --project-name=royalpublicschool-tatiri",
+    "db:migrate:local": "wrangler d1 migrations apply rps --local --env=\"\"",
+    "deploy": "node scripts/clean-cf-build-output.mjs && npm run build && wrangler deploy --env=\"\" --keep-vars",
     "build:images": "node scripts/process-images.mjs"
   },
   "dependencies": {
