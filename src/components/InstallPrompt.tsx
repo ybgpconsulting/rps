@@ -81,7 +81,7 @@ export function InstallPrompt({ ready }: { ready: boolean }) {
   return (
     <aside
       aria-label={t('install.title')}
-      className="fixed inset-x-3 top-[calc(env(safe-area-inset-top,0px)+12px)] z-[110] sm:left-auto sm:right-5 sm:w-[416px]"
+      className="fixed inset-x-3 bottom-32 z-[110] sm:left-auto sm:right-5 sm:w-[416px] lg:bottom-24"
     >
       <div className="flex items-center gap-2 rounded-2xl border border-gold/35 bg-cream p-2 shadow-[0_18px_48px_-16px_rgba(10,27,51,0.55)]">
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-royal-deep text-gold-light">
